@@ -24,6 +24,7 @@ log = logging.getLogger("planer")
 
 TOKEN = os.environ["TOKEN"]
 PORT = int(os.environ.get("PORT", "10000"))
+PUBLIC_URL = os.environ.get("PUBLIC_URL", "https://planer-bot-hpd7.onrender.com")
 
 # ──────────────────────────────────────────────────────
 # Formatting helpers
@@ -392,6 +393,17 @@ async def job_check_reminders(context: ContextTypes.DEFAULT_TYPE):
             log.exception("reminder failed for task %s: %s", t["id"], e)
 
 
+async def job_keepalive(context: ContextTypes.DEFAULT_TYPE):
+    """Self-ping every 10 min so Render Free doesn't spin down."""
+    import aiohttp
+    try:
+        async with aiohttp.ClientSession() as s:
+            async with s.get(f"{PUBLIC_URL}/health", timeout=aiohttp.ClientTimeout(total=30)) as r:
+                log.info("keepalive ping -> %s", r.status)
+    except Exception as e:
+        log.warning("keepalive failed: %s", e)
+
+
 # ──────────────────────────────────────────────────────
 # Health server (Render Free needs an open port)
 # ──────────────────────────────────────────────────────
@@ -440,6 +452,7 @@ def build_app():
     jq.run_daily(job_evening_ping, time(22, 0, tzinfo=TZ))
     jq.run_daily(job_morning_list, time(8, 0, tzinfo=TZ))
     jq.run_repeating(job_check_reminders, interval=60, first=10)
+    jq.run_repeating(job_keepalive, interval=600, first=60)  # every 10 min
 
     return app
 
