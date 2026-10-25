@@ -1,0 +1,14 @@
+name: Keep Alive
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping health endpoint
+        run: |
+          curl -fsS --max-time 60 https://planer-bot-hpd7.onrender.com/health || true
+          echo "pinged at $(date -u +%FT%TZ)"
