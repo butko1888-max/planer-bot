@@ -76,22 +76,24 @@ def add_task(user_id: int, text: str, due_date=None, remind_at=None):
         return cur.fetchone()
 
 
-def tasks_for_date(user_id: int, date):
+def tasks_for_date(user_id: int, date, include_done: bool = True):
+    done_clause = "" if include_done else "AND done = FALSE"
     with conn() as c, c.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute("""
+        cur.execute(f"""
             SELECT * FROM planer_tasks
-            WHERE user_id = %s AND due_date = %s AND done = FALSE
-            ORDER BY remind_at NULLS LAST, id
+            WHERE user_id = %s AND due_date = %s {done_clause}
+            ORDER BY done, remind_at NULLS LAST, id
         """, (user_id, date))
         return cur.fetchall()
 
 
-def tasks_in_range(user_id: int, start_date, end_date):
+def tasks_in_range(user_id: int, start_date, end_date, include_done: bool = True):
+    done_clause = "" if include_done else "AND done = FALSE"
     with conn() as c, c.cursor(cursor_factory=RealDictCursor) as cur:
-        cur.execute("""
+        cur.execute(f"""
             SELECT * FROM planer_tasks
-            WHERE user_id = %s AND due_date BETWEEN %s AND %s AND done = FALSE
-            ORDER BY due_date, remind_at NULLS LAST, id
+            WHERE user_id = %s AND due_date BETWEEN %s AND %s {done_clause}
+            ORDER BY due_date, done, remind_at NULLS LAST, id
         """, (user_id, start_date, end_date))
         return cur.fetchall()
 
@@ -109,6 +111,11 @@ def inbox_tasks(user_id: int):
 def mark_done(task_id: int, user_id: int):
     with conn() as c, c.cursor() as cur:
         cur.execute("UPDATE planer_tasks SET done = TRUE WHERE id = %s AND user_id = %s", (task_id, user_id))
+
+
+def mark_undone(task_id: int, user_id: int):
+    with conn() as c, c.cursor() as cur:
+        cur.execute("UPDATE planer_tasks SET done = FALSE WHERE id = %s AND user_id = %s", (task_id, user_id))
 
 
 def delete_task(task_id: int, user_id: int):

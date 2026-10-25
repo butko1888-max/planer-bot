@@ -44,15 +44,21 @@ def fmt_date(d: date) -> str:
 
 
 def fmt_task_line(t) -> str:
-    mark = "✅" if t["done"] else "▫️"
     time_part = ""
     if t["remind_at"]:
         local = t["remind_at"].astimezone(TZ)
         time_part = f" ⏰ {local.strftime('%H:%M')}"
-    return f"{mark} {t['text']}{time_part}"
+    if t["done"]:
+        return f"✅ <s>{t['text']}</s>{time_part}"
+    return f"▫️ {t['text']}{time_part}"
 
 
 def task_buttons(t):
+    if t["done"]:
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton("↩️ Вернуть в задачи", callback_data=f"undone:{t['id']}")],
+            [InlineKeyboardButton("🗑 Удалить", callback_data=f"del:{t['id']}")],
+        ])
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("✅ Готово", callback_data=f"done:{t['id']}")],
         [
@@ -66,8 +72,7 @@ def task_buttons(t):
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     [
         [KeyboardButton("📅 Сегодня"), KeyboardButton("📆 Завтра")],
-        [KeyboardButton("🗓 Неделя"), KeyboardButton("📥 Инбокс")],
-        [KeyboardButton("➕ Новая задача"), KeyboardButton("❓ Помощь")],
+        [KeyboardButton("🗓 Неделя"), KeyboardButton("➕ Новая задача")],
     ],
     resize_keyboard=True,
     is_persistent=True,
@@ -126,18 +131,26 @@ async def cmd_week(update: Update, _):
     end = today + timedelta(days=6)
     tasks = db.tasks_in_range(uid, today, end)
     if not tasks:
-        await update.message.reply_text("На неделе пока пусто.")
+        await update.message.reply_text("На неделе пока пусто.", reply_markup=MAIN_KEYBOARD)
         return
-    # group by date
+    # Group by date, then split into pending/done
     by_day = {}
     for t in tasks:
         by_day.setdefault(t["due_date"], []).append(t)
     lines = []
     for d in sorted(by_day):
+        pending = [t for t in by_day[d] if not t["done"]]
+        done = [t for t in by_day[d] if t["done"]]
         lines.append(f"\n<b>{fmt_date(d).capitalize()}</b>")
-        for t in by_day[d]:
-            lines.append(fmt_task_line(t))
-    await update.message.reply_html("\n".join(lines))
+        if pending:
+            lines.append("<i>Не выполнено:</i>")
+            for t in pending:
+                lines.append(fmt_task_line(t))
+        if done:
+            lines.append("<i>Выполнено:</i>")
+            for t in done:
+                lines.append(fmt_task_line(t))
+    await update.message.reply_html("\n".join(lines), reply_markup=MAIN_KEYBOARD)
 
 
 async def cmd_inbox(update: Update, _):
@@ -154,22 +167,31 @@ async def cmd_inbox(update: Update, _):
 async def send_day_list(chat_id, user_id, d: date, context, msg=None):
     tasks = db.tasks_for_date(user_id, d)
     header = f"📅 {fmt_date(d).capitalize()}"
+
+    async def send(text, **kw):
+        if msg:
+            await msg.reply_text(text, **kw)
+        else:
+            await context.bot.send_message(chat_id, text, **kw)
+
     if not tasks:
-        text = f"{header}\n\nПусто. Отлично или подозрительно 👀"
-        if msg:
-            await msg.reply_text(text)
-        else:
-            await context.bot.send_message(chat_id, text)
+        await send(f"{header}\n\nПусто. Отлично или подозрительно 👀", reply_markup=MAIN_KEYBOARD)
         return
-    if msg:
-        await msg.reply_text(f"{header} ({len(tasks)}):")
-    else:
-        await context.bot.send_message(chat_id, f"{header} ({len(tasks)}):")
-    for t in tasks:
-        if msg:
-            await msg.reply_text(fmt_task_line(t), reply_markup=task_buttons(t))
-        else:
-            await context.bot.send_message(chat_id, fmt_task_line(t), reply_markup=task_buttons(t))
+
+    pending = [t for t in tasks if not t["done"]]
+    done = [t for t in tasks if t["done"]]
+
+    summary = f"{header}\n⏳ Не выполнено: {len(pending)}  ·  ✅ Выполнено: {len(done)}"
+    await send(summary, reply_markup=MAIN_KEYBOARD)
+
+    if pending:
+        await send("⏳ <b>Не выполнено</b>", parse_mode="HTML")
+        for t in pending:
+            await send(fmt_task_line(t), parse_mode="HTML", reply_markup=task_buttons(t))
+    if done:
+        await send("✅ <b>Выполнено</b>", parse_mode="HTML")
+        for t in done:
+            await send(fmt_task_line(t), parse_mode="HTML", reply_markup=task_buttons(t))
 
 
 # ──────────────────────────────────────────────────────
@@ -189,10 +211,6 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return await cmd_tomorrow(update, context)
     if text == "🗓 Неделя":
         return await cmd_week(update, context)
-    if text == "📥 Инбокс":
-        return await cmd_inbox(update, context)
-    if text == "❓ Помощь":
-        return await cmd_help(update, context)
     if text == "➕ Новая задача":
         await update.message.reply_html(
             "Пиши задачу одним сообщением. Пример:\n"
@@ -267,7 +285,12 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if action == "done":
         db.mark_done(task_id, uid)
-        await q.edit_message_text(f"✅ <s>{t['text']}</s>", parse_mode="HTML")
+        t2 = db.get_task(task_id, uid)
+        await q.edit_message_text(fmt_task_line(t2), parse_mode="HTML", reply_markup=task_buttons(t2))
+    elif action == "undone":
+        db.mark_undone(task_id, uid)
+        t2 = db.get_task(task_id, uid)
+        await q.edit_message_text(fmt_task_line(t2), parse_mode="HTML", reply_markup=task_buttons(t2))
     elif action == "del":
         db.delete_task(task_id, uid)
         await q.edit_message_text(f"🗑 Удалено: {t['text']}")
