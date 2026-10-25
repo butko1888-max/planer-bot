@@ -4,7 +4,10 @@ import logging
 from datetime import datetime, timedelta, time, date
 import pytz
 from aiohttp import web
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
+from telegram import (
+    Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand,
+    ReplyKeyboardMarkup, KeyboardButton,
+)
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
     ContextTypes, filters
@@ -50,12 +53,25 @@ def fmt_task_line(t) -> str:
 
 
 def task_buttons(t):
-    return InlineKeyboardMarkup([[
-        InlineKeyboardButton("✅", callback_data=f"done:{t['id']}"),
-        InlineKeyboardButton("⏰", callback_data=f"remind:{t['id']}"),
-        InlineKeyboardButton("📅", callback_data=f"move:{t['id']}"),
-        InlineKeyboardButton("🗑", callback_data=f"del:{t['id']}"),
-    ]])
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("✅ Готово", callback_data=f"done:{t['id']}")],
+        [
+            InlineKeyboardButton("⏰ Напомнить", callback_data=f"remind:{t['id']}"),
+            InlineKeyboardButton("📅 Перенести", callback_data=f"move:{t['id']}"),
+        ],
+        [InlineKeyboardButton("🗑 Удалить", callback_data=f"del:{t['id']}")],
+    ])
+
+
+MAIN_KEYBOARD = ReplyKeyboardMarkup(
+    [
+        [KeyboardButton("📅 Сегодня"), KeyboardButton("📆 Завтра")],
+        [KeyboardButton("🗓 Неделя"), KeyboardButton("📥 Инбокс")],
+        [KeyboardButton("➕ Новая задача"), KeyboardButton("❓ Помощь")],
+    ],
+    resize_keyboard=True,
+    is_persistent=True,
+)
 
 
 # ──────────────────────────────────────────────────────
@@ -87,11 +103,11 @@ HELP_TEXT = (
 async def cmd_start(update: Update, _):
     u = update.effective_user
     db.upsert_user(u.id, u.first_name or "")
-    await update.message.reply_html(HELP_TEXT)
+    await update.message.reply_html(HELP_TEXT, reply_markup=MAIN_KEYBOARD)
 
 
 async def cmd_help(update: Update, _):
-    await update.message.reply_html(HELP_TEXT)
+    await update.message.reply_html(HELP_TEXT, reply_markup=MAIN_KEYBOARD)
 
 
 async def cmd_today(update: Update, _):
@@ -166,24 +182,49 @@ async def on_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
     text = update.message.text.strip()
 
+    # Reply keyboard buttons
+    if text == "📅 Сегодня":
+        return await cmd_today(update, context)
+    if text == "📆 Завтра":
+        return await cmd_tomorrow(update, context)
+    if text == "🗓 Неделя":
+        return await cmd_week(update, context)
+    if text == "📥 Инбокс":
+        return await cmd_inbox(update, context)
+    if text == "❓ Помощь":
+        return await cmd_help(update, context)
+    if text == "➕ Новая задача":
+        await update.message.reply_html(
+            "Пиши задачу одним сообщением. Пример:\n"
+            "<code>завтра 15:00 созвон с клиентом</code>\n"
+            "<code>через час написать подрядчику</code>",
+            reply_markup=MAIN_KEYBOARD,
+        )
+        return
+
     # If waiting for reminder time for a task
     if uid in WAITING_REMIND:
         task_id = WAITING_REMIND.pop(uid)
         t = db.get_task(task_id, uid)
         if not t:
-            await update.message.reply_text("Задача уже удалена.")
+            await update.message.reply_text("Задача уже удалена.", reply_markup=MAIN_KEYBOARD)
             return
         base = t["due_date"] or datetime.now(TZ).date()
         remind_at = parse_time_only(text, base_date=base)
         if not remind_at:
-            await update.message.reply_text("Не понял время. Пример: <code>15:00</code> или <code>через час</code>", parse_mode="HTML")
+            await update.message.reply_text(
+                "Не понял время. Пример: <code>15:00</code> или <code>через час</code>",
+                parse_mode="HTML",
+                reply_markup=MAIN_KEYBOARD,
+            )
             WAITING_REMIND[uid] = task_id
             return
         new_date = remind_at.astimezone(TZ).date()
         db.set_task_date(task_id, uid, new_date, remind_at)
         local = remind_at.astimezone(TZ)
         await update.message.reply_html(
-            f"⏰ Напомню <b>{fmt_date(new_date)}</b> в <b>{local.strftime('%H:%M')}</b>:\n{t['text']}"
+            f"⏰ Напомню <b>{fmt_date(new_date)}</b> в <b>{local.strftime('%H:%M')}</b>:\n{t['text']}",
+            reply_markup=MAIN_KEYBOARD,
         )
         return
 
