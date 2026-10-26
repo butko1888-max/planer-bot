@@ -274,8 +274,9 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     uid = q.from_user.id
     try:
-        action, raw = q.data.split(":", 1)
-        task_id = int(raw)
+        parts = q.data.split(":")
+        action = parts[0]
+        task_id = int(parts[1])
     except Exception:
         return
 
@@ -316,9 +317,7 @@ async def on_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup(buttons),
         )
     elif action == "setdate":
-        parts = raw.split(":")
-        task_id = int(parts[0])
-        offset = int(parts[1])
+        offset = int(parts[2])
         if offset == -1:
             db.set_task_date(task_id, uid, None, None)
             await q.edit_message_text(f"📥 Перенёс в инбокс: {t['text']}")
